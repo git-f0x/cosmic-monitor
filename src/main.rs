@@ -144,10 +144,12 @@ fn stat<'a>(label: String, value: String) -> Element<'a, Message> {
     widget::column!(widget::text::body(label), widget::text::heading(value)).into()
 }
 
-fn stats_row<'a>(stats: Vec<Element<'a, Message>>) -> Element<'a, Message> {
-    widget::row::with_children(stats)
-        .spacing(theme::spacing().space_m)
-        .into()
+fn stats_row(stats: Vec<Element<'_, Message>>) -> widget::FlexRow<'_, Message> {
+    widget::flex_row(stats).column_spacing(theme::spacing().space_m)
+}
+
+fn tags_row(tags: Vec<Element<'_, Message>>) -> widget::FlexRow<'_, Message> {
+    widget::flex_row(tags).spacing(theme::spacing().space_xxs)
 }
 
 fn print_help() {
@@ -592,8 +594,6 @@ impl App {
         sortable: bool,
         count: usize,
     ) -> Element<'a, Message> {
-        let cosmic_theme::Spacing { space_xxs, .. } = theme::spacing();
-
         let categories = ProcessCategory::for_top_processes(sort_category);
         let mut column = widget::column::with_capacity(count + 2);
         column = column.push(table_header(
@@ -641,7 +641,7 @@ impl App {
                 sort_direction
             )),
         )
-        .spacing(space_xxs)
+        .spacing(theme::spacing().space_xxs)
         .into()
     }
 
@@ -694,34 +694,35 @@ impl App {
             ProcessCategory::CPU,
             move || {
                 //TODO: CPU power
-                let stats = widget::row::with_capacity(3)
-                    .spacing(space_xxs)
-                    .push(self.tag(
+                let mut tags = Vec::with_capacity(3);
+                tags.extend([
+                    self.tag(
                         stat(
                             fl!("utilization"),
                             format!("{:.1}%", graph_item.total_cpu_usage()),
                         ),
                         Message::CpuGraph(ProcGraphKind::Utilization),
                         true,
-                    ))
-                    .push(self.tag(
+                    ),
+                    self.tag(
                         stat(
                             fl!("speed"),
                             format_frequency(graph_item.max_cpu_frequency()),
                         ),
                         Message::CpuGraph(ProcGraphKind::Frequency),
                         true,
+                    ),
+                ]);
+                if let Some(temp) = graph_item.max_cpu_temp() {
+                    tags.push(self.tag(
+                        stat(fl!("temperature"), format!("{:.1}°C", temp)),
+                        Message::CpuGraph(ProcGraphKind::Temperature),
+                        true,
                     ))
-                    .push_maybe(graph_item.max_cpu_temp().map(|temp| {
-                        self.tag(
-                            stat(fl!("temperature"), format!("{:.1}°C", temp)),
-                            Message::CpuGraph(ProcGraphKind::Temperature),
-                            true,
-                        )
-                    }));
+                }
                 self.graph_section(
                     fl!("overall-utilization"),
-                    stats,
+                    tags_row(tags),
                     GraphKind::Cpu(self.cpu_graph),
                 )
             },
@@ -811,10 +812,7 @@ impl App {
     }
 
     fn view_gpu<'a>(&'a self, gpu: &'a GpuItem, gpu_i: usize) -> Element<'a, Message> {
-        let cosmic_theme::Spacing {
-            space_l, space_xxs, ..
-        } = theme::spacing();
-        let mut column = widget::column::with_capacity(2).spacing(space_l);
+        let mut column = widget::column::with_capacity(2).spacing(theme::spacing().space_l);
         match gpu.state {
             GpuState::Active | GpuState::Idle(_) => {
                 if let Some(usage) = gpu.usage {
@@ -822,37 +820,36 @@ impl App {
                     column = column.push(self.responsive_graph_top_processes(
                         ProcessCategory::GpuUsage(gpu.id, Some(gpu_i)),
                         move || {
-                            let stats = widget::row::with_capacity(4)
-                                .spacing(space_xxs)
-                                .push(self.tag(
-                                    stat(fl!("utilization"), format!("{:.1}%", usage)),
-                                    Message::GpuGraph(gpu.id, ProcGraphKind::Utilization),
+                            let mut tags = Vec::with_capacity(4);
+                            tags.push(self.tag(
+                                stat(fl!("utilization"), format!("{:.1}%", usage)),
+                                Message::GpuGraph(gpu.id, ProcGraphKind::Utilization),
+                                true,
+                            ));
+                            if let Some(frequency) = gpu.frequency {
+                                tags.push(self.tag(
+                                    stat(fl!("speed"), format_frequency(frequency)),
+                                    Message::GpuGraph(gpu.id, ProcGraphKind::Frequency),
                                     true,
-                                ))
-                                .push_maybe(gpu.frequency.map(|frequency| {
-                                    self.tag(
-                                        stat(fl!("speed"), format_frequency(frequency)),
-                                        Message::GpuGraph(gpu.id, ProcGraphKind::Frequency),
-                                        true,
-                                    )
-                                }))
-                                .push_maybe(gpu.power.map(|power| {
-                                    self.tag(
-                                        stat(fl!("power"), format!("{:.1} W", power)),
-                                        Message::GpuGraph(gpu.id, ProcGraphKind::Power),
-                                        true,
-                                    )
-                                }))
-                                .push_maybe(gpu.temp.map(|temp| {
-                                    self.tag(
-                                        stat(fl!("temperature"), format!("{:.1}°C", temp)),
-                                        Message::GpuGraph(gpu.id, ProcGraphKind::Temperature),
-                                        true,
-                                    )
-                                }));
+                                ));
+                            }
+                            if let Some(power) = gpu.power {
+                                tags.push(self.tag(
+                                    stat(fl!("power"), format!("{:.1} W", power)),
+                                    Message::GpuGraph(gpu.id, ProcGraphKind::Power),
+                                    true,
+                                ));
+                            }
+                            if let Some(temp) = gpu.temp {
+                                tags.push(self.tag(
+                                    stat(fl!("temperature"), format!("{:.1}°C", temp)),
+                                    Message::GpuGraph(gpu.id, ProcGraphKind::Temperature),
+                                    true,
+                                ));
+                            }
                             self.graph_section(
                                 fl!("gpu-utilization"),
-                                stats,
+                                tags_row(tags),
                                 GraphKind::Gpu(
                                     gpu.id,
                                     self.gpu_graphs.get(&gpu.id).copied().unwrap_or_default(),
@@ -913,22 +910,21 @@ impl App {
         ));
 
         for disk in graph_item.disks.iter() {
-            let stats = stats_row(vec![
+            let mut stats = Vec::with_capacity(6);
+            stats.extend([
                 stat(fl!("mount-path"), disk.mount_path.clone()),
                 stat(fl!("capacity"), format_bytes(disk.total)),
                 stat(fl!("in-use"), format_used(disk.used, disk.total)),
                 stat(fl!("reading"), format_rate(disk.read as u64)),
                 stat(fl!("writing"), format_rate(disk.write as u64)),
-                if let Some(temp) = disk.temp {
-                    stat(fl!("temperature"), format!("{:.1}°C", temp))
-                } else {
-                    widget::column!().into()
-                },
             ]);
+            if let Some(temp) = disk.temp {
+                stats.push(stat(fl!("temperature"), format!("{:.1}°C", temp)))
+            }
             column = column.push(
                 widget::column!(
                     widget::text::title4(&disk.name),
-                    stats,
+                    stats_row(stats),
                     widget::responsive(move |size| {
                         let graphs = vec![
                             self.titled_graph(fl!("reading"), GraphKind::DiskRead(&disk.name)),
